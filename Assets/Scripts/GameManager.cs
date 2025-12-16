@@ -85,7 +85,14 @@ public class GameManager : MonoBehaviour
             GameObject camObj = new GameObject("Main Camera");
             camObj.tag = "MainCamera";
             MainCamera = camObj.AddComponent<Camera>();
+            camObj.AddComponent<AudioListener>();
             camObj.transform.position = new Vector3(0, 0, -10);
+        }
+
+        // Ensure AudioListener exists
+        if (MainCamera.GetComponent<AudioListener>() == null)
+        {
+            MainCamera.gameObject.AddComponent<AudioListener>();
         }
 
         // Ensure camera is at correct Z position
@@ -140,6 +147,13 @@ public class GameManager : MonoBehaviour
         {
             GameObject ghostObj = new GameObject("GhostManager");
             GhostManager = ghostObj.AddComponent<GhostManager>();
+        }
+
+        // Create Audio Manager if not assigned
+        if (AudioManager.Instance == null)
+        {
+            GameObject audioObj = new GameObject("AudioManager");
+            audioObj.AddComponent<AudioManager>();
         }
 
         // Create background

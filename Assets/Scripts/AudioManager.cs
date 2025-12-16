@@ -38,6 +38,14 @@ public class AudioManager : MonoBehaviour
 
     void Start()
     {
+        // Try to load from Resources if not assigned
+        if (level1Music == null)
+            level1Music = Resources.Load<AudioClip>("Audio/level1");
+        if (level2Music == null)
+            level2Music = Resources.Load<AudioClip>("Audio/level2");
+        if (level3Music == null)
+            level3Music = Resources.Load<AudioClip>("Audio/level3");
+
         // Start playing music if clip is assigned
         if (level1Music != null)
         {
