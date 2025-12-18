@@ -39,6 +39,13 @@ public class GhostManager : MonoBehaviour
         public string timetoken;
     }
 
+    // Player trail settings
+    private const int TRAIL_LENGTH = 5;
+    private const float TRAIL_INTERVAL = 0.15f; // seconds between trail positions
+    private List<Vector2> playerTrailPositions = new List<Vector2>();
+    private List<GameObject> playerTrailObjects = new List<GameObject>();
+    private float lastTrailTime = 0f;
+
     void Start()
     {
         userId = "user-" + Random.Range(1, 1000000);
@@ -47,6 +54,19 @@ public class GhostManager : MonoBehaviour
         // Start subscribe coroutines
         StartCoroutine(SubscribeToGhosts());
         StartCoroutine(SubscribeToOccupancy());
+
+        // Initialize player trail objects
+        for (int i = 0; i < TRAIL_LENGTH; i++)
+        {
+            GameObject trailObj = CreateGhostObject();
+            // Make older trail positions more transparent
+            SpriteRenderer sr = trailObj.GetComponent<SpriteRenderer>();
+            float alpha = 0.5f * (1f - (float)i / TRAIL_LENGTH);
+            sr.color = new Color(1f, 1f, 1f, alpha); // White for own trail
+            sr.sortingOrder = 0; // Behind player (1) but in front of background (-1)
+            trailObj.SetActive(false);
+            playerTrailObjects.Add(trailObj);
+        }
     }
 
     void Update()
@@ -68,8 +88,50 @@ public class GhostManager : MonoBehaviour
             }
         }
 
+        // Update player ghost trail
+        UpdatePlayerTrail();
+
         // Render ghost players
         RenderGhosts();
+    }
+
+    void UpdatePlayerTrail()
+    {
+        if (gameManager.Player == null) return;
+
+        // Record position at intervals
+        if (Time.time - lastTrailTime >= TRAIL_INTERVAL)
+        {
+            lastTrailTime = Time.time;
+            Vector2 currentPos = gameManager.Player.GetPosition();
+
+            // Add current position to front of trail
+            playerTrailPositions.Insert(0, currentPos);
+
+            // Keep only TRAIL_LENGTH positions
+            if (playerTrailPositions.Count > TRAIL_LENGTH)
+            {
+                playerTrailPositions.RemoveAt(playerTrailPositions.Count - 1);
+            }
+        }
+
+        // Update trail object positions
+        for (int i = 0; i < playerTrailObjects.Count; i++)
+        {
+            if (i < playerTrailPositions.Count)
+            {
+                playerTrailObjects[i].SetActive(true);
+                playerTrailObjects[i].transform.position = new Vector3(
+                    playerTrailPositions[i].x,
+                    playerTrailPositions[i].y,
+                    0
+                );
+            }
+            else
+            {
+                playerTrailObjects[i].SetActive(false);
+            }
+        }
     }
 
     IEnumerator PublishPosition(float x, float y)
@@ -247,25 +309,41 @@ public class GhostManager : MonoBehaviour
 
         // Create circle sprite renderer
         SpriteRenderer sr = obj.AddComponent<SpriteRenderer>();
-        sr.color = new Color(1, 1, 1, 0.5f);
+        sr.color = new Color(0.5f, 0.8f, 1f, 0.7f); // Light blue, semi-transparent ghost color
 
-        // Create circle texture
-        int resolution = 64;
-        Texture2D texture = new Texture2D(resolution, resolution);
+        // Try to find shader, with fallback
+        Shader shader = Shader.Find("Sprites/Default");
+        if (shader == null)
+        {
+            shader = Shader.Find("Universal Render Pipeline/2D/Sprite-Lit-Default");
+        }
+        if (shader == null)
+        {
+            shader = Shader.Find("Unlit/Transparent");
+        }
+        if (shader != null)
+        {
+            sr.material = new Material(shader);
+        }
+
+        // Ensure ghosts render in front of everything
+        sr.sortingOrder = 10;
+
+        // Create circle texture with proper format
+        int resolution = 128;
+        Texture2D texture = new Texture2D(resolution, resolution, TextureFormat.RGBA32, false);
+        texture.filterMode = FilterMode.Bilinear;
         Color[] colors = new Color[resolution * resolution];
         float center = resolution / 2f;
-        float radius = resolution / 2f - 2;
+        float radius = resolution / 2f - 1;
 
         for (int y = 0; y < resolution; y++)
         {
             for (int x = 0; x < resolution; x++)
             {
                 float dist = Vector2.Distance(new Vector2(x, y), new Vector2(center, center));
-                // Ring effect (outline only)
-                if (dist <= radius && dist >= radius - 4)
-                    colors[y * resolution + x] = Color.white;
-                else
-                    colors[y * resolution + x] = Color.clear;
+                // Filled circle
+                colors[y * resolution + x] = dist <= radius ? Color.white : Color.clear;
             }
         }
 
@@ -284,5 +362,13 @@ public class GhostManager : MonoBehaviour
     void OnDestroy()
     {
         StopAllCoroutines();
+
+        // Clean up trail objects
+        foreach (var trailObj in playerTrailObjects)
+        {
+            if (trailObj != null)
+                Destroy(trailObj);
+        }
+        playerTrailObjects.Clear();
     }
 }

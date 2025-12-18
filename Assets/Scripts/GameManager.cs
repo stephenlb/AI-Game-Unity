@@ -202,12 +202,12 @@ public class GameManager : MonoBehaviour
         float distance = GetCollisionDistance();
         float combinedRadius = (AI.size + Player.size) / 100f; // Convert to Unity units
 
-        // Proximity warning - shake effect
+        // Proximity warning - color change only (no shake)
         float proximityThreshold = 4f;
         if (distance <= proximityThreshold)
         {
             ShakeAmount = (proximityThreshold - distance) * 12.5f;
-            UpdateBackgroundColor();
+            UpdateBackgroundColor(false); // Disable screen shake
         }
         else
         {
@@ -248,7 +248,7 @@ public class GameManager : MonoBehaviour
         }
     }
 
-    void UpdateBackgroundColor()
+    void UpdateBackgroundColor(bool applyShake = true)
     {
         if (BackgroundRenderer == null) return;
 
@@ -263,8 +263,8 @@ public class GameManager : MonoBehaviour
 
         BackgroundRenderer.color = shakeColor;
 
-        // Apply screen shake
-        if (MainCamera != null && ShakeAmount > 0)
+        // Apply screen shake only if enabled
+        if (applyShake && MainCamera != null && ShakeAmount > 0)
         {
             float shake = ShakeAmount * 0.01f;
             MainCamera.transform.position = new Vector3(

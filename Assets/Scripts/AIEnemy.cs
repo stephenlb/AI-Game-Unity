@@ -77,14 +77,12 @@ public class AIEnemy : Entity
         newPos.x += moveX;
         newPos.y += moveY;
 
-        // Wrap around screen edges
+        // Clamp to screen edges
         float halfWidth = width / 2f;
         float halfHeight = height / 2f;
 
-        if (newPos.x < -halfWidth) newPos.x = halfWidth;
-        if (newPos.x > halfWidth) newPos.x = -halfWidth;
-        if (newPos.y < -halfHeight) newPos.y = halfHeight;
-        if (newPos.y > halfHeight) newPos.y = -halfHeight;
+        newPos.x = Mathf.Clamp(newPos.x, -halfWidth, halfWidth);
+        newPos.y = Mathf.Clamp(newPos.y, -halfHeight, halfHeight);
 
         transform.position = newPos;
 
@@ -129,9 +127,6 @@ public class AIEnemy : Entity
         knowledge = 0;
         speed = 1 + (level * 0.4f);
         size = 120 + (level * 10);
-
-        // Reset position to center of screen
-        transform.position = new Vector3(0, 0, 0);
 
         UpdateVisuals();
     }
