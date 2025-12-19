@@ -1,80 +1,364 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.EnhancedTouch;
+using System.Collections.Generic;
+using Touch = UnityEngine.InputSystem.EnhancedTouch.Touch;
 
-/// <summary>
-/// Player entity controlled by mouse position
-/// </summary>
+/// <summary>Player controlled by mouse/touch with enhanced visuals and abilities</summary>
 public class Player : Entity
 {
-    [Header("Player Properties")]
     public float score;
     public string userId;
 
-    private Camera mainCamera;
-    private GameManager gameManager;
+    [Header("Particle Trail")]
+    public int trailLength = 15;
+    public float trailSpawnRate = 0.03f;
+
+    [Header("AI Block Ability")]
+    public float blockDuration = 3f;
+    public float blockCooldown = 8f;
+    public float blockSlowAmount = 0.3f;
+
+    [Header("Power-ups")]
+    public bool hasSpeedBoost;
+    public bool hasInvincibility;
+    public float speedBoostMultiplier = 1.5f;
+
+    Camera cam;
+    GameManager gm;
+    List<GameObject> trailParticles = new List<GameObject>();
+    float lastTrailSpawn;
+    Vector3 lastPosition;
+
+    // Block ability state
+    float blockCooldownRemaining;
+    bool blockRequested;
+
+    // Visual effects
+    float invincibilityFlashTime;
 
     protected override void Awake()
     {
         base.Awake();
-        mainCamera = Camera.main;
+        cam = Camera.main;
         userId = System.Guid.NewGuid().ToString();
+        CreateTrailParticles();
+
+        // Enable enhanced touch support
+        EnhancedTouchSupport.Enable();
     }
 
     protected override void Start()
     {
         base.Start();
-        gameManager = GameManager.Instance;
+        gm = GameManager.Instance;
     }
 
-    void Update()
+    protected override void Update()
     {
-        if (gameManager == null || gameManager.CurrentScene != GameScene.Play)
-            return;
+        base.Update();
 
-        // Get camera reference if not set
-        if (mainCamera == null)
-            mainCamera = Camera.main;
-        if (mainCamera == null) return;
+        if (gm == null || gm.CurrentScene != GameScene.Play) return;
+        if (cam == null) cam = Camera.main;
+        if (cam == null) return;
 
-        // Follow mouse position (using new Input System)
-        if (Mouse.current == null) return;
-        Vector3 mousePos = mainCamera.ScreenToWorldPoint(Mouse.current.position.ReadValue());
-        mousePos.z = 0;
+        // Block cooldown
+        if (blockCooldownRemaining > 0)
+            blockCooldownRemaining -= Time.deltaTime;
 
-        // Apply shake if needed
-        if (gameManager.ShakeAmount > 0)
+        // Handle block input (keyboard, mouse right-click, or UI button)
+        bool shouldBlock = blockRequested ||
+                          (Keyboard.current?.spaceKey.wasPressedThisFrame == true) ||
+                          (Mouse.current?.rightButton.wasPressedThisFrame == true);
+
+        if (shouldBlock && blockCooldownRemaining <= 0)
         {
-            float shake = gameManager.ShakeAmount;
-            mousePos.x += Random.Range(-shake, shake) * 0.01f;
-            mousePos.y += Random.Range(-shake, shake) * 0.01f;
+            ActivateBlock();
+            blockRequested = false;
         }
 
-        transform.position = mousePos;
+        // Get input position (touch or mouse)
+        Vector3 inputPosition;
+        bool hasInput = GetInputPosition(out inputPosition);
+
+        Vector3 targetPos;
+
+        if (hasInput)
+        {
+            // Follow input position
+            targetPos = inputPosition;
+            targetPos.z = 0;
+
+            // Apply speed boost
+            if (hasSpeedBoost)
+            {
+                Vector3 direction = (targetPos - transform.position).normalized;
+                float distance = Vector3.Distance(targetPos, transform.position);
+                targetPos = transform.position + direction * Mathf.Min(distance * speedBoostMultiplier, distance);
+            }
+        }
+        else
+        {
+            targetPos = transform.position;
+        }
+
+        // Apply shake effect
+        if (gm.ShakeAmount > 0 && !hasInvincibility)
+        {
+            float s = gm.ShakeAmount * 0.01f;
+            targetPos.x += Random.Range(-s, s);
+            targetPos.y += Random.Range(-s, s);
+        }
+
+        // Clamp to game bounds
+        targetPos.x = Mathf.Clamp(targetPos.x, -gm.GameWidth / 2f + 0.5f, gm.GameWidth / 2f - 0.5f);
+        targetPos.y = Mathf.Clamp(targetPos.y, -gm.GameHeight / 2f + 0.5f, gm.GameHeight / 2f - 0.5f);
+
+        transform.position = targetPos;
+
+        // Update trail
+        UpdateTrail();
+
+        // Invincibility visual effect
+        if (hasInvincibility)
+        {
+            invincibilityFlashTime += Time.deltaTime * 10f;
+            float flash = Mathf.Sin(invincibilityFlashTime) * 0.5f + 0.5f;
+            SetGlowColor(Color.Lerp(Color.cyan, Color.white, flash));
+            spriteRenderer.color = Color.Lerp(entityColor, Color.white, flash * 0.5f);
+        }
+
+        lastPosition = transform.position;
+    }
+
+    bool GetInputPosition(out Vector3 position)
+    {
+        position = Vector3.zero;
+
+        // Check for touch input first (mobile)
+        if (Touch.activeTouches.Count > 0)
+        {
+            var touch = Touch.activeTouches[0];
+            position = cam.ScreenToWorldPoint(new Vector3(touch.screenPosition.x, touch.screenPosition.y, 0));
+            position.z = 0;
+            return true;
+        }
+
+        // Fall back to mouse input (desktop)
+        if (Mouse.current != null)
+        {
+            position = cam.ScreenToWorldPoint(Mouse.current.position.ReadValue());
+            position.z = 0;
+            return true;
+        }
+
+        return false;
+    }
+
+    void ActivateBlock()
+    {
+        if (gm?.AI == null) return;
+
+        blockCooldownRemaining = blockCooldown;
+
+        // Slow down the AI
+        gm.AI.ApplySlowdown(blockDuration, blockSlowAmount);
+
+        // Visual feedback - pulse effect on player
+        SpawnBlockParticles();
+
+        // Audio feedback
+        AudioManager.Instance?.PlaySFX(AudioManager.SFXType.PowerUp);
+    }
+
+    // Called by UI button
+    public void RequestBlock()
+    {
+        if (blockCooldownRemaining <= 0)
+        {
+            blockRequested = true;
+        }
+    }
+
+    void SpawnBlockParticles()
+    {
+        for (int i = 0; i < 12; i++)
+        {
+            var particle = CreateParticle(transform.position, Color.blue, 0.5f);
+            float angle = i * 30f * Mathf.Deg2Rad;
+            Vector3 dir = new Vector3(Mathf.Cos(angle), Mathf.Sin(angle), 0);
+            StartCoroutine(AnimateParticle(particle, dir * 4f, 0.4f));
+        }
+    }
+
+    System.Collections.IEnumerator AnimateParticle(GameObject particle, Vector3 velocity, float duration)
+    {
+        float elapsed = 0;
+        Vector3 startPos = particle.transform.position;
+        var sr = particle.GetComponent<SpriteRenderer>();
+        Color startColor = sr.color;
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = elapsed / duration;
+            particle.transform.position = startPos + velocity * t;
+            particle.transform.localScale = Vector3.one * (1f - t) * 0.5f;
+            sr.color = new Color(startColor.r, startColor.g, startColor.b, startColor.a * (1f - t));
+            yield return null;
+        }
+
+        Destroy(particle);
+    }
+
+    void CreateTrailParticles()
+    {
+        for (int i = 0; i < trailLength; i++)
+        {
+            var particle = CreateParticle(transform.position, entityColor, 0f);
+            particle.SetActive(false);
+            trailParticles.Add(particle);
+        }
+    }
+
+    GameObject CreateParticle(Vector3 position, Color color, float alpha)
+    {
+        var obj = new GameObject("TrailParticle");
+        obj.transform.position = position;
+        var sr = obj.AddComponent<SpriteRenderer>();
+        sr.material = new Material(Shader.Find("Sprites/Default"));
+        sr.sortingOrder = -1;
+
+        // Create soft circle texture
+        int res = 64;
+        var tex = new Texture2D(res, res, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
+        var colors = new Color[res * res];
+        float center = res / 2f;
+
+        for (int y = 0; y < res; y++)
+            for (int x = 0; x < res; x++)
+            {
+                float dist = Vector2.Distance(new Vector2(x, y), new Vector2(center, center));
+                float a = Mathf.Clamp01(1f - dist / center);
+                a = a * a;
+                colors[y * res + x] = new Color(1, 1, 1, a);
+            }
+
+        tex.SetPixels(colors);
+        tex.Apply();
+        sr.sprite = Sprite.Create(tex, new Rect(0, 0, res, res), new Vector2(0.5f, 0.5f), 100);
+        color.a = alpha;
+        sr.color = color;
+
+        return obj;
+    }
+
+    void UpdateTrail()
+    {
+        if (Time.time - lastTrailSpawn < trailSpawnRate) return;
+        lastTrailSpawn = Time.time;
+
+        // Shift particles
+        for (int i = trailParticles.Count - 1; i > 0; i--)
+        {
+            if (trailParticles[i - 1].activeSelf)
+            {
+                trailParticles[i].transform.position = trailParticles[i - 1].transform.position;
+                trailParticles[i].SetActive(true);
+            }
+
+            // Fade based on index
+            var sr = trailParticles[i].GetComponent<SpriteRenderer>();
+            float alpha = 1f - (float)i / trailLength;
+            Color c = entityColor;
+            c.a = alpha * 0.6f;
+            sr.color = c;
+            trailParticles[i].transform.localScale = Vector3.one * (0.8f - (float)i / trailLength * 0.5f);
+        }
+
+        // Update first particle
+        trailParticles[0].transform.position = transform.position;
+        trailParticles[0].SetActive(true);
+        var sr0 = trailParticles[0].GetComponent<SpriteRenderer>();
+        Color c0 = entityColor;
+        c0.a = 0.6f;
+        sr0.color = c0;
+        trailParticles[0].transform.localScale = Vector3.one * 0.8f;
     }
 
     public static Color GetColorFromName(string name)
     {
-        if (string.IsNullOrEmpty(name))
-            return Color.cyan;
-
-        int colorValue = 0;
-        foreach (char c in name)
-        {
-            colorValue += (int)c;
-        }
-
-        float r = ((colorValue >> 3) % 256) / 255f;
-        float g = ((colorValue >> 4) % 256) / 255f;
-        float b = ((colorValue >> 5) % 256) / 255f;
-
-        return new Color(r, g, b);
+        if (string.IsNullOrEmpty(name)) return Color.cyan;
+        int v = 0;
+        foreach (char c in name) v += c;
+        return new Color(((v >> 3) % 256) / 255f, ((v >> 4) % 256) / 255f, ((v >> 5) % 256) / 255f);
     }
 
-    public void ResetPlayer(string newName)
+    public void ResetPlayer(string name)
     {
-        entityName = newName;
-        entityColor = GetColorFromName(newName);
+        entityName = name;
+        entityColor = GetColorFromName(name);
         score = 1;
+        hasSpeedBoost = false;
+        hasInvincibility = false;
+        blockCooldownRemaining = 0;
+        blockRequested = false;
         UpdateVisuals();
     }
+
+    public void ApplyPowerUp(PowerUpType type, float duration)
+    {
+        switch (type)
+        {
+            case PowerUpType.SpeedBoost:
+                hasSpeedBoost = true;
+                SetGlowColor(Color.yellow);
+                break;
+            case PowerUpType.Invincibility:
+                hasInvincibility = true;
+                SetGlowColor(Color.cyan);
+                break;
+        }
+
+        StartCoroutine(RemovePowerUpAfterDelay(type, duration));
+    }
+
+    System.Collections.IEnumerator RemovePowerUpAfterDelay(PowerUpType type, float delay)
+    {
+        yield return new WaitForSeconds(delay);
+
+        switch (type)
+        {
+            case PowerUpType.SpeedBoost:
+                hasSpeedBoost = false;
+                break;
+            case PowerUpType.Invincibility:
+                hasInvincibility = false;
+                break;
+        }
+
+        SetGlowColor(entityColor);
+        spriteRenderer.color = entityColor;
+    }
+
+    public float GetBlockCooldownPercent()
+    {
+        return blockCooldownRemaining / blockCooldown;
+    }
+
+    public bool HasInvincibility => hasInvincibility;
+
+    void OnDestroy()
+    {
+        foreach (var p in trailParticles)
+            if (p) Destroy(p);
+        trailParticles.Clear();
+    }
+}
+
+public enum PowerUpType
+{
+    SpeedBoost,
+    Invincibility,
+    AISlowdown
 }

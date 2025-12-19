@@ -3,225 +3,163 @@ using UnityEngine.Networking;
 using System.Collections;
 using System.Collections.Generic;
 
-/// <summary>
-/// Manages multiplayer ghost players via PubNub
-/// </summary>
+/// <summary>Multiplayer ghosts & player trail with enhanced visuals via PubNub</summary>
 public class GhostManager : MonoBehaviour
 {
-    [Header("PubNub Settings")]
-    private const string PUBLISH_KEY = "pub-c-ed826874-f30b-4d98-b87a-396accbe7f28";
-    private const string SUBSCRIBE_KEY = "sub-c-8d52d20d-c3a8-4d4b-bed7-5ee42ad6c4a0";
-    private const string GHOST_CHANNEL = "ghosts";
-    private const string OCCUPANCY_CHANNEL = "ai-game,ai-game-pnpres";
+    const string PUBLISH_KEY = "pub-c-ed826874-f30b-4d98-b87a-396accbe7f28";
+    const string SUBSCRIBE_KEY = "sub-c-8d52d20d-c3a8-4d4b-bed7-5ee42ad6c4a0";
+    const string GHOST_CHANNEL = "ghosts";
+    const string OCCUPANCY_CHANNEL = "ai-game,ai-game-pnpres";
+    const int TRAIL_LENGTH = 8;
+    const float TRAIL_INTERVAL = 0.1f;
 
-    private string userId;
-    private string timeToken = "0";
-    private string occupancyTimeToken = "0";
-
-    private Dictionary<string, GhostData> ghosts = new Dictionary<string, GhostData>();
-    private Dictionary<string, GameObject> ghostObjects = new Dictionary<string, GameObject>();
-
-    private GameManager gameManager;
-    private int lastPublishFrame = 0;
-
-    [System.Serializable]
-    private class GhostData
-    {
-        public string id;
-        public float x;
-        public float y;
-    }
+    string userId, timeToken = "0", occupancyTimeToken = "0";
+    Dictionary<string, GhostData> ghosts = new Dictionary<string, GhostData>();
+    Dictionary<string, GameObject> ghostObjects = new Dictionary<string, GameObject>();
+    List<Vector2> trailPositions = new List<Vector2>();
+    List<GameObject> trailObjects = new List<GameObject>();
+    GameManager gm;
+    int lastPublishFrame;
+    float lastTrailTime;
 
     [System.Serializable]
-    private class PubNubResponse
-    {
-        public object[] messages;
-        public string timetoken;
-    }
-
-    // Player trail settings
-    private const int TRAIL_LENGTH = 5;
-    private const float TRAIL_INTERVAL = 0.15f; // seconds between trail positions
-    private List<Vector2> playerTrailPositions = new List<Vector2>();
-    private List<GameObject> playerTrailObjects = new List<GameObject>();
-    private float lastTrailTime = 0f;
+    class GhostData { public string id; public float x, y; public string name; public int score; }
 
     void Start()
     {
         userId = "user-" + Random.Range(1, 1000000);
-        gameManager = GameManager.Instance;
-
-        // Start subscribe coroutines
+        gm = GameManager.Instance;
         StartCoroutine(SubscribeToGhosts());
         StartCoroutine(SubscribeToOccupancy());
 
-        // Initialize player trail objects
+        // Init trail objects with fading alpha and glow
         for (int i = 0; i < TRAIL_LENGTH; i++)
         {
-            GameObject trailObj = CreateGhostObject();
-            // Make older trail positions more transparent
-            SpriteRenderer sr = trailObj.GetComponent<SpriteRenderer>();
-            float alpha = 0.5f * (1f - (float)i / TRAIL_LENGTH);
-            sr.color = new Color(1f, 1f, 1f, alpha); // White for own trail
-            sr.sortingOrder = 0; // Behind player (1) but in front of background (-1)
-            trailObj.SetActive(false);
-            playerTrailObjects.Add(trailObj);
+            var obj = CreateGlowingTrailObject();
+            var sr = obj.GetComponent<SpriteRenderer>();
+            float alpha = 0.6f * (1f - (float)i / TRAIL_LENGTH);
+            sr.color = new Color(0.3f, 0.8f, 1f, alpha);
+            sr.sortingOrder = -1 - i;
+            float scale = 0.6f * (1f - (float)i / TRAIL_LENGTH * 0.5f);
+            obj.transform.localScale = Vector3.one * scale;
+            obj.SetActive(false);
+            trailObjects.Add(obj);
         }
     }
 
     void Update()
     {
-        if (gameManager == null || gameManager.CurrentScene != GameScene.Play)
-            return;
+        if (gm == null || gm.CurrentScene != GameScene.Play) return;
 
-        // Publish player coordinates every 60 frames
-        if (Time.frameCount - lastPublishFrame >= 60)
+        // Publish position every 60 frames
+        if (Time.frameCount - lastPublishFrame >= 60 && gm.Player != null)
         {
             lastPublishFrame = Time.frameCount;
-            if (gameManager.Player != null)
-            {
-                Vector2 pos = gameManager.Player.GetPosition();
-                // Convert Unity coordinates back to pixel coordinates
-                float pixelX = (pos.x + gameManager.GameWidth / 2f) * 100f;
-                float pixelY = (pos.y + gameManager.GameHeight / 2f) * 100f;
-                StartCoroutine(PublishPosition(pixelX, pixelY));
-            }
+            var pos = gm.Player.GetPosition();
+            StartCoroutine(PublishPosition(
+                (pos.x + gm.GameWidth / 2f) * 100f,
+                (pos.y + gm.GameHeight / 2f) * 100f,
+                gm.Player.entityName,
+                gm.Score));
         }
 
-        // Update player ghost trail
-        UpdatePlayerTrail();
-
-        // Render ghost players
+        UpdateTrail();
         RenderGhosts();
     }
 
-    void UpdatePlayerTrail()
+    void UpdateTrail()
     {
-        if (gameManager.Player == null) return;
+        if (gm.Player == null) return;
 
-        // Record position at intervals
         if (Time.time - lastTrailTime >= TRAIL_INTERVAL)
         {
             lastTrailTime = Time.time;
-            Vector2 currentPos = gameManager.Player.GetPosition();
-
-            // Add current position to front of trail
-            playerTrailPositions.Insert(0, currentPos);
-
-            // Keep only TRAIL_LENGTH positions
-            if (playerTrailPositions.Count > TRAIL_LENGTH)
-            {
-                playerTrailPositions.RemoveAt(playerTrailPositions.Count - 1);
-            }
+            trailPositions.Insert(0, gm.Player.GetPosition());
+            if (trailPositions.Count > TRAIL_LENGTH)
+                trailPositions.RemoveAt(trailPositions.Count - 1);
         }
 
-        // Update trail object positions
-        for (int i = 0; i < playerTrailObjects.Count; i++)
+        // Animate trail with pulsing
+        float pulse = Mathf.Sin(Time.time * 5f) * 0.1f + 1f;
+
+        for (int i = 0; i < trailObjects.Count; i++)
         {
-            if (i < playerTrailPositions.Count)
+            if (i < trailPositions.Count)
             {
-                playerTrailObjects[i].SetActive(true);
-                playerTrailObjects[i].transform.position = new Vector3(
-                    playerTrailPositions[i].x,
-                    playerTrailPositions[i].y,
-                    0
-                );
+                trailObjects[i].SetActive(true);
+                trailObjects[i].transform.position = new Vector3(trailPositions[i].x, trailPositions[i].y, 0.1f);
+
+                var sr = trailObjects[i].GetComponent<SpriteRenderer>();
+                float alpha = 0.5f * (1f - (float)i / TRAIL_LENGTH);
+
+                // Color based on player state
+                Color trailColor;
+                if (gm.Player.hasInvincibility)
+                    trailColor = new Color(0f, 1f, 1f, alpha);
+                else
+                    trailColor = new Color(gm.Player.entityColor.r, gm.Player.entityColor.g, gm.Player.entityColor.b, alpha);
+
+                sr.color = trailColor;
+
+                float baseScale = 0.5f * (1f - (float)i / TRAIL_LENGTH * 0.4f);
+                trailObjects[i].transform.localScale = Vector3.one * baseScale * pulse;
             }
             else
             {
-                playerTrailObjects[i].SetActive(false);
+                trailObjects[i].SetActive(false);
             }
         }
     }
 
-    IEnumerator PublishPosition(float x, float y)
+    IEnumerator PublishPosition(float x, float y, string name, int score)
     {
-        string message = JsonUtility.ToJson(new GhostData
-        {
-            id = userId,
-            x = x,
-            y = y
-        });
-
-        string encodedMessage = UnityWebRequest.EscapeURL(message);
-        string url = $"https://ps.pndsn.com/publish/{PUBLISH_KEY}/{SUBSCRIBE_KEY}/0/{GHOST_CHANNEL}/0/{encodedMessage}?uuid={userId}";
-
-        using (UnityWebRequest request = UnityWebRequest.Get(url))
-        {
-            yield return request.SendWebRequest();
-            // Ignore errors silently
-        }
+        var data = new GhostData { id = userId, x = x, y = y, name = name, score = score };
+        var msg = UnityWebRequest.EscapeURL(JsonUtility.ToJson(data));
+        using (var req = UnityWebRequest.Get($"https://ps.pndsn.com/publish/{PUBLISH_KEY}/{SUBSCRIBE_KEY}/0/{GHOST_CHANNEL}/0/{msg}?uuid={userId}"))
+            yield return req.SendWebRequest();
     }
 
     IEnumerator SubscribeToGhosts()
     {
         while (true)
         {
-            string url = $"https://ps.pndsn.com/subscribe/{SUBSCRIBE_KEY}/{GHOST_CHANNEL}/0/{timeToken}?uuid={userId}";
-
-            using (UnityWebRequest request = UnityWebRequest.Get(url))
+            using (var req = UnityWebRequest.Get($"https://ps.pndsn.com/subscribe/{SUBSCRIBE_KEY}/{GHOST_CHANNEL}/0/{timeToken}?uuid={userId}"))
             {
-                request.timeout = 5;
-                yield return request.SendWebRequest();
+                req.timeout = 5;
+                yield return req.SendWebRequest();
 
-                if (request.result == UnityWebRequest.Result.Success)
+                if (req.result == UnityWebRequest.Result.Success)
                 {
                     try
                     {
-                        string response = request.downloadHandler.text;
-                        // Parse the simple PubNub response format: [[messages], "timetoken"]
-                        // This is a simplified parser
-                        int lastBracket = response.LastIndexOf('"');
-                        int secondLastQuote = response.LastIndexOf('"', lastBracket - 1);
-                        if (secondLastQuote >= 0 && lastBracket > secondLastQuote)
-                        {
-                            timeToken = response.Substring(secondLastQuote + 1, lastBracket - secondLastQuote - 1);
-                        }
+                        var r = req.downloadHandler.text;
+                        int last = r.LastIndexOf('"'), second = r.LastIndexOf('"', last - 1);
+                        if (second >= 0) timeToken = r.Substring(second + 1, last - second - 1);
 
-                        // Extract messages (simplified)
-                        int messagesStart = response.IndexOf("[[");
-                        int messagesEnd = response.IndexOf("]]");
-                        if (messagesStart >= 0 && messagesEnd > messagesStart)
-                        {
-                            string messagesStr = response.Substring(messagesStart + 1, messagesEnd - messagesStart);
-                            // Parse individual messages
-                            ParseGhostMessages(messagesStr);
-                        }
+                        int start = r.IndexOf("[["), end = r.IndexOf("]]");
+                        if (start >= 0 && end > start) ParseGhostMessages(r.Substring(start + 1, end - start));
                     }
-                    catch (System.Exception)
-                    {
-                        // Parsing error, continue
-                    }
+                    catch { }
                 }
             }
-
             yield return new WaitForSeconds(0.1f);
         }
     }
 
-    void ParseGhostMessages(string messagesStr)
+    void ParseGhostMessages(string msg)
     {
-        // Simple JSON parsing for ghost messages
         int start = 0;
-        while ((start = messagesStr.IndexOf("{\"id\"", start)) >= 0)
+        while ((start = msg.IndexOf("{\"id\"", start)) >= 0)
         {
-            int end = messagesStr.IndexOf("}", start);
+            int end = msg.IndexOf("}", start);
             if (end < 0) break;
-
-            string jsonObj = messagesStr.Substring(start, end - start + 1);
             try
             {
-                GhostData ghost = JsonUtility.FromJson<GhostData>(jsonObj);
+                var ghost = JsonUtility.FromJson<GhostData>(msg.Substring(start, end - start + 1));
                 if (ghost != null && !string.IsNullOrEmpty(ghost.id) && ghost.id != userId)
-                {
                     ghosts[ghost.id] = ghost;
-                }
             }
-            catch (System.Exception)
-            {
-                // Parsing error for this message
-            }
-
+            catch { }
             start = end + 1;
         }
     }
@@ -230,131 +168,155 @@ public class GhostManager : MonoBehaviour
     {
         while (true)
         {
-            string url = $"https://ps.pndsn.com/subscribe/{SUBSCRIBE_KEY}/{OCCUPANCY_CHANNEL}/0/{occupancyTimeToken}?uuid={userId}";
-
-            using (UnityWebRequest request = UnityWebRequest.Get(url))
+            using (var req = UnityWebRequest.Get($"https://ps.pndsn.com/subscribe/{SUBSCRIBE_KEY}/{OCCUPANCY_CHANNEL}/0/{occupancyTimeToken}?uuid={userId}"))
             {
-                request.timeout = 5;
-                yield return request.SendWebRequest();
+                req.timeout = 5;
+                yield return req.SendWebRequest();
 
-                if (request.result == UnityWebRequest.Result.Success)
+                if (req.result == UnityWebRequest.Result.Success)
                 {
                     try
                     {
-                        string response = request.downloadHandler.text;
+                        var r = req.downloadHandler.text;
+                        int last = r.LastIndexOf('"'), second = r.LastIndexOf('"', last - 1);
+                        if (second >= 0) occupancyTimeToken = r.Substring(second + 1, last - second - 1);
 
-                        // Extract timetoken
-                        int lastBracket = response.LastIndexOf('"');
-                        int secondLastQuote = response.LastIndexOf('"', lastBracket - 1);
-                        if (secondLastQuote >= 0 && lastBracket > secondLastQuote)
+                        int idx = r.IndexOf("\"occupancy\":");
+                        if (idx >= 0)
                         {
-                            occupancyTimeToken = response.Substring(secondLastQuote + 1, lastBracket - secondLastQuote - 1);
-                        }
-
-                        // Look for occupancy in response
-                        int occIndex = response.IndexOf("\"occupancy\":");
-                        if (occIndex >= 0)
-                        {
-                            int numStart = occIndex + 12;
-                            int numEnd = numStart;
-                            while (numEnd < response.Length && char.IsDigit(response[numEnd]))
-                                numEnd++;
-
-                            if (numEnd > numStart)
-                            {
-                                string occStr = response.Substring(numStart, numEnd - numStart);
-                                if (int.TryParse(occStr, out int occ) && gameManager != null)
-                                {
-                                    gameManager.Occupancy = occ;
-                                }
-                            }
+                            int numStart = idx + 12, numEnd = numStart;
+                            while (numEnd < r.Length && char.IsDigit(r[numEnd])) numEnd++;
+                            if (numEnd > numStart && int.TryParse(r.Substring(numStart, numEnd - numStart), out int occ))
+                                gm.Occupancy = occ;
                         }
                     }
-                    catch (System.Exception)
-                    {
-                        // Parsing error
-                    }
+                    catch { }
                 }
             }
-
             yield return new WaitForSeconds(1f);
         }
     }
 
     void RenderGhosts()
     {
+        float pulse = Mathf.Sin(Time.time * 3f) * 0.1f + 1f;
+
         foreach (var kvp in ghosts)
         {
-            string id = kvp.Key;
-            GhostData data = kvp.Value;
+            float ux = (kvp.Value.x / 100f) - gm.GameWidth / 2f;
+            float uy = (kvp.Value.y / 100f) - gm.GameHeight / 2f;
 
-            // Convert pixel coordinates to Unity coordinates
-            float unityX = (data.x / 100f) - gameManager.GameWidth / 2f;
-            float unityY = (data.y / 100f) - gameManager.GameHeight / 2f;
+            if (!ghostObjects.ContainsKey(kvp.Key))
+                ghostObjects[kvp.Key] = CreateGhostObject(kvp.Value.name);
 
-            if (!ghostObjects.ContainsKey(id))
-            {
-                // Create new ghost object
-                GameObject ghostObj = CreateGhostObject();
-                ghostObjects[id] = ghostObj;
-            }
+            var ghost = ghostObjects[kvp.Key];
+            ghost.transform.position = Vector3.Lerp(
+                ghost.transform.position,
+                new Vector3(ux, uy, 0),
+                Time.deltaTime * 10f);
+            ghost.transform.localScale = Vector3.one * 1.0f * pulse;
 
-            ghostObjects[id].transform.position = new Vector3(unityX, unityY, 0);
+            // Update name label if exists
+            var nameLabel = ghost.GetComponentInChildren<TextMesh>();
+            if (nameLabel && !string.IsNullOrEmpty(kvp.Value.name))
+                nameLabel.text = kvp.Value.name;
         }
     }
 
-    GameObject CreateGhostObject()
+    GameObject CreateGlowingTrailObject()
     {
-        GameObject obj = new GameObject("Ghost");
+        var obj = new GameObject("TrailGlow");
+        var sr = obj.AddComponent<SpriteRenderer>();
+        sr.material = new Material(Shader.Find("Sprites/Default"));
 
-        // Create circle sprite renderer
-        SpriteRenderer sr = obj.AddComponent<SpriteRenderer>();
-        sr.color = new Color(0.5f, 0.8f, 1f, 0.7f); // Light blue, semi-transparent ghost color
+        // Create soft glow texture
+        int res = 64;
+        var tex = new Texture2D(res, res, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
+        var colors = new Color[res * res];
+        float center = res / 2f;
 
-        // Try to find shader, with fallback
-        Shader shader = Shader.Find("Sprites/Default");
-        if (shader == null)
-        {
-            shader = Shader.Find("Universal Render Pipeline/2D/Sprite-Lit-Default");
-        }
-        if (shader == null)
-        {
-            shader = Shader.Find("Unlit/Transparent");
-        }
-        if (shader != null)
-        {
-            sr.material = new Material(shader);
-        }
-
-        // Ensure ghosts render in front of everything
-        sr.sortingOrder = 10;
-
-        // Create circle texture with proper format
-        int resolution = 128;
-        Texture2D texture = new Texture2D(resolution, resolution, TextureFormat.RGBA32, false);
-        texture.filterMode = FilterMode.Bilinear;
-        Color[] colors = new Color[resolution * resolution];
-        float center = resolution / 2f;
-        float radius = resolution / 2f - 1;
-
-        for (int y = 0; y < resolution; y++)
-        {
-            for (int x = 0; x < resolution; x++)
+        for (int y = 0; y < res; y++)
+            for (int x = 0; x < res; x++)
             {
                 float dist = Vector2.Distance(new Vector2(x, y), new Vector2(center, center));
-                // Filled circle
-                colors[y * resolution + x] = dist <= radius ? Color.white : Color.clear;
+                float alpha = Mathf.Clamp01(1f - dist / center);
+                alpha = alpha * alpha;
+                colors[y * res + x] = new Color(1, 1, 1, alpha);
             }
+
+        tex.SetPixels(colors);
+        tex.Apply();
+        sr.sprite = Sprite.Create(tex, new Rect(0, 0, res, res), new Vector2(0.5f, 0.5f), 100);
+
+        return obj;
+    }
+
+    GameObject CreateGhostObject(string name = null)
+    {
+        var obj = new GameObject("Ghost");
+        var sr = obj.AddComponent<SpriteRenderer>();
+
+        // Create color based on name for variety
+        Color ghostColor;
+        if (!string.IsNullOrEmpty(name))
+        {
+            ghostColor = Player.GetColorFromName(name);
+            ghostColor.a = 0.6f;
         }
+        else
+        {
+            ghostColor = new Color(0.5f, 0.8f, 1f, 0.6f);
+        }
+        sr.color = ghostColor;
 
-        texture.SetPixels(colors);
-        texture.Apply();
+        // Shader with fallbacks
+        var shader = Shader.Find("Sprites/Default")
+            ?? Shader.Find("Universal Render Pipeline/2D/Sprite-Lit-Default")
+            ?? Shader.Find("Unlit/Transparent");
+        if (shader != null) sr.material = new Material(shader);
+        sr.sortingOrder = 10;
 
-        sr.sprite = Sprite.Create(texture, new Rect(0, 0, resolution, resolution), new Vector2(0.5f, 0.5f), 100);
+        // Create circle texture with glow
+        int res = 128;
+        var tex = new Texture2D(res, res, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
+        var colors = new Color[res * res];
+        float center = res / 2f, radius = center - 1;
 
-        // Scale to player size
-        float scale = 60f / 50f;
-        obj.transform.localScale = new Vector3(scale, scale, 1);
+        for (int y = 0; y < res; y++)
+            for (int x = 0; x < res; x++)
+            {
+                float dist = Vector2.Distance(new Vector2(x, y), new Vector2(center, center));
+                float alpha;
+                if (dist <= radius * 0.7f)
+                    alpha = 1f;
+                else if (dist <= radius)
+                    alpha = 1f - (dist - radius * 0.7f) / (radius * 0.3f);
+                else
+                    alpha = 0f;
+                colors[y * res + x] = new Color(1, 1, 1, alpha * alpha);
+            }
+
+        tex.SetPixels(colors);
+        tex.Apply();
+        sr.sprite = Sprite.Create(tex, new Rect(0, 0, res, res), new Vector2(0.5f, 0.5f), 100);
+        obj.transform.localScale = Vector3.one * 1.0f;
+
+        // Add name label
+        if (!string.IsNullOrEmpty(name))
+        {
+            var labelObj = new GameObject("GhostLabel");
+            labelObj.transform.SetParent(obj.transform);
+            labelObj.transform.localPosition = new Vector3(0, -0.8f, 0);
+            var textMesh = labelObj.AddComponent<TextMesh>();
+            textMesh.text = name;
+            textMesh.alignment = TextAlignment.Center;
+            textMesh.anchor = TextAnchor.MiddleCenter;
+            textMesh.fontSize = 20;
+            textMesh.characterSize = 0.08f;
+            textMesh.color = new Color(1, 1, 1, 0.7f);
+            var mr = labelObj.GetComponent<MeshRenderer>();
+            if (mr) mr.sortingOrder = 11;
+        }
 
         return obj;
     }
@@ -362,13 +324,9 @@ public class GhostManager : MonoBehaviour
     void OnDestroy()
     {
         StopAllCoroutines();
-
-        // Clean up trail objects
-        foreach (var trailObj in playerTrailObjects)
-        {
-            if (trailObj != null)
-                Destroy(trailObj);
-        }
-        playerTrailObjects.Clear();
+        foreach (var t in trailObjects) if (t) Destroy(t);
+        trailObjects.Clear();
+        foreach (var g in ghostObjects.Values) if (g) Destroy(g);
+        ghostObjects.Clear();
     }
 }
