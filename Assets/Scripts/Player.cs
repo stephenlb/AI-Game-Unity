@@ -19,10 +19,19 @@ public class Player : Entity
     public float blockCooldown = 8f;
     public float blockSlowAmount = 0.3f;
 
+    [Header("Shield Ability")]
+    public float shieldDuration = 1.5f;
+    public float shieldCooldown = 5f;
+
     [Header("Power-ups")]
     public bool hasSpeedBoost;
     public bool hasInvincibility;
+    public bool hasTimeSlow;
     public float speedBoostMultiplier = 1.5f;
+
+    [Header("Near Miss")]
+    public float nearMissDistance = 1.5f;
+    public int nearMissBonus = 50;
 
     Camera cam;
     GameManager gm;
@@ -34,6 +43,16 @@ public class Player : Entity
     float blockCooldownRemaining;
     bool blockRequested;
 
+    // Shield ability state
+    float shieldCooldownRemaining;
+    bool isShielded;
+    float shieldTimeRemaining;
+
+    // Near miss state
+    bool wasInNearMissZone;
+    float nearMissTime;
+    int nearMissStreak;
+
     // Visual effects
     float invincibilityFlashTime;
 
@@ -43,9 +62,20 @@ public class Player : Entity
         cam = Camera.main;
         userId = System.Guid.NewGuid().ToString();
         CreateTrailParticles();
+    }
 
+    void OnEnable()
+    {
         // Enable enhanced touch support
-        EnhancedTouchSupport.Enable();
+        if (!EnhancedTouchSupport.enabled)
+            EnhancedTouchSupport.Enable();
+    }
+
+    void OnDisable()
+    {
+        // Disable enhanced touch support when not needed
+        if (EnhancedTouchSupport.enabled)
+            EnhancedTouchSupport.Disable();
     }
 
     protected override void Start()
@@ -66,6 +96,22 @@ public class Player : Entity
         if (blockCooldownRemaining > 0)
             blockCooldownRemaining -= Time.deltaTime;
 
+        // Shield cooldown
+        if (shieldCooldownRemaining > 0)
+            shieldCooldownRemaining -= Time.deltaTime;
+
+        // Shield duration
+        if (isShielded)
+        {
+            shieldTimeRemaining -= Time.deltaTime;
+            if (shieldTimeRemaining <= 0)
+            {
+                isShielded = false;
+                SetGlowColor(entityColor);
+                spriteRenderer.color = entityColor;
+            }
+        }
+
         // Handle block input (keyboard, mouse right-click, or UI button)
         bool shouldBlock = blockRequested ||
                           (Keyboard.current?.spaceKey.wasPressedThisFrame == true) ||
@@ -75,6 +121,15 @@ public class Player : Entity
         {
             ActivateBlock();
             blockRequested = false;
+        }
+
+        // Handle shield input (Shift key)
+        bool shouldShield = (Keyboard.current?.leftShiftKey.wasPressedThisFrame == true) ||
+                           (Keyboard.current?.rightShiftKey.wasPressedThisFrame == true);
+
+        if (shouldShield && shieldCooldownRemaining <= 0 && !isShielded)
+        {
+            ActivateShield();
         }
 
         // Get input position (touch or mouse)
@@ -103,7 +158,7 @@ public class Player : Entity
         }
 
         // Apply shake effect
-        if (gm.ShakeAmount > 0 && !hasInvincibility)
+        if (gm.ShakeAmount > 0 && !hasInvincibility && !isShielded)
         {
             float s = gm.ShakeAmount * 0.01f;
             targetPos.x += Random.Range(-s, s);
@@ -116,16 +171,24 @@ public class Player : Entity
 
         transform.position = targetPos;
 
+        // Check for near miss
+        UpdateNearMiss();
+
         // Update trail
         UpdateTrail();
 
         // Invincibility visual effect
-        if (hasInvincibility)
+        if (hasInvincibility || isShielded)
         {
             invincibilityFlashTime += Time.deltaTime * 10f;
             float flash = Mathf.Sin(invincibilityFlashTime) * 0.5f + 0.5f;
-            SetGlowColor(Color.Lerp(Color.cyan, Color.white, flash));
+            Color flashColor = isShielded ? new Color(0f, 1f, 0.5f) : Color.cyan;
+            SetGlowColor(Color.Lerp(flashColor, Color.white, flash));
             spriteRenderer.color = Color.Lerp(entityColor, Color.white, flash * 0.5f);
+
+            // Shield particles
+            if (isShielded && Time.frameCount % 5 == 0)
+                SpawnShieldParticle();
         }
 
         lastPosition = transform.position;
@@ -135,8 +198,8 @@ public class Player : Entity
     {
         position = Vector3.zero;
 
-        // Check for touch input first (mobile)
-        if (Touch.activeTouches.Count > 0)
+        // Check for touch input first (mobile) - with safety check
+        if (EnhancedTouchSupport.enabled && Touch.activeTouches.Count > 0)
         {
             var touch = Touch.activeTouches[0];
             position = cam.ScreenToWorldPoint(new Vector3(touch.screenPosition.x, touch.screenPosition.y, 0));
@@ -169,6 +232,125 @@ public class Player : Entity
 
         // Audio feedback
         AudioManager.Instance?.PlaySFX(AudioManager.SFXType.PowerUp);
+    }
+
+    void ActivateShield()
+    {
+        isShielded = true;
+        shieldTimeRemaining = shieldDuration;
+        shieldCooldownRemaining = shieldCooldown;
+
+        // Audio feedback
+        AudioManager.Instance?.PlaySFX(AudioManager.SFXType.PowerUp);
+
+        // Visual feedback - shield activation burst
+        SpawnShieldBurstParticles();
+    }
+
+    void SpawnShieldBurstParticles()
+    {
+        for (int i = 0; i < 16; i++)
+        {
+            var particle = CreateParticle(transform.position, new Color(0f, 1f, 0.5f), 0.9f);
+            float angle = i * 22.5f * Mathf.Deg2Rad;
+            Vector3 dir = new Vector3(Mathf.Cos(angle), Mathf.Sin(angle), 0);
+            StartCoroutine(AnimateParticle(particle, dir * 2.5f, 0.4f));
+        }
+    }
+
+    void SpawnShieldParticle()
+    {
+        float angle = Random.Range(0f, 360f) * Mathf.Deg2Rad;
+        float radius = 0.8f;
+        Vector3 offset = new Vector3(Mathf.Cos(angle), Mathf.Sin(angle), 0) * radius;
+        var particle = CreateParticle(transform.position + offset, new Color(0f, 1f, 0.5f, 0.7f), 0.5f);
+        particle.transform.localScale = Vector3.one * 0.25f;
+        StartCoroutine(AnimateShieldParticle(particle, angle));
+    }
+
+    System.Collections.IEnumerator AnimateShieldParticle(GameObject particle, float startAngle)
+    {
+        float elapsed = 0;
+        float duration = 0.5f;
+        var sr = particle.GetComponent<SpriteRenderer>();
+
+        while (elapsed < duration && particle != null)
+        {
+            elapsed += Time.deltaTime;
+            float t = elapsed / duration;
+            float angle = startAngle + t * Mathf.PI;
+            float radius = 0.8f * (1f - t * 0.5f);
+            particle.transform.position = transform.position + new Vector3(Mathf.Cos(angle), Mathf.Sin(angle), 0) * radius;
+            particle.transform.localScale = Vector3.one * 0.25f * (1f - t);
+            sr.color = new Color(0f, 1f, 0.5f, (1f - t) * 0.7f);
+            yield return null;
+        }
+
+        if (particle != null) Destroy(particle);
+    }
+
+    void UpdateNearMiss()
+    {
+        if (gm?.AI == null) return;
+
+        float dist = Vector2.Distance(GetPosition(), gm.AI.GetPosition());
+        float collisionDist = (gm.AI.size + size) / 100f;
+        bool inNearMissZone = dist > collisionDist && dist < nearMissDistance;
+
+        if (inNearMissZone)
+        {
+            nearMissTime += Time.deltaTime;
+
+            // Award bonus for each 0.5 seconds in near miss zone
+            if (nearMissTime >= 0.5f)
+            {
+                nearMissTime = 0f;
+                nearMissStreak++;
+                int bonus = nearMissBonus * nearMissStreak;
+                gm.AddNearMissBonus(bonus);
+
+                // Visual and audio feedback
+                AudioManager.Instance?.PlaySFX(AudioManager.SFXType.NearMiss);
+                SpawnNearMissParticles();
+
+                // Haptic feedback on mobile
+                #if UNITY_IOS || UNITY_ANDROID
+                Handheld.Vibrate();
+                #endif
+            }
+        }
+        else if (wasInNearMissZone && !inNearMissZone && dist > nearMissDistance)
+        {
+            // Successfully escaped near miss zone
+            if (nearMissStreak > 0)
+            {
+                gm.OnNearMissEscape(nearMissStreak);
+            }
+            nearMissStreak = 0;
+            nearMissTime = 0f;
+        }
+
+        wasInNearMissZone = inNearMissZone;
+    }
+
+    void SpawnNearMissParticles()
+    {
+        for (int i = 0; i < 6; i++)
+        {
+            var particle = CreateParticle(transform.position, Color.yellow, 0.7f);
+            float angle = Random.Range(0f, 360f) * Mathf.Deg2Rad;
+            Vector3 dir = new Vector3(Mathf.Cos(angle), Mathf.Sin(angle), 0);
+            StartCoroutine(AnimateParticle(particle, dir * 2f, 0.3f));
+        }
+    }
+
+    // Called by UI button for shield on mobile
+    public void RequestShield()
+    {
+        if (shieldCooldownRemaining <= 0 && !isShielded)
+        {
+            ActivateShield();
+        }
     }
 
     // Called by UI button
@@ -301,8 +483,14 @@ public class Player : Entity
         score = 1;
         hasSpeedBoost = false;
         hasInvincibility = false;
+        hasTimeSlow = false;
         blockCooldownRemaining = 0;
         blockRequested = false;
+        shieldCooldownRemaining = 0;
+        isShielded = false;
+        nearMissStreak = 0;
+        nearMissTime = 0f;
+        wasInNearMissZone = false;
         UpdateVisuals();
     }
 
@@ -317,6 +505,10 @@ public class Player : Entity
             case PowerUpType.Invincibility:
                 hasInvincibility = true;
                 SetGlowColor(Color.cyan);
+                break;
+            case PowerUpType.TimeSlow:
+                hasTimeSlow = true;
+                SetGlowColor(new Color(0.5f, 0f, 1f)); // Purple
                 break;
         }
 
@@ -335,6 +527,9 @@ public class Player : Entity
             case PowerUpType.Invincibility:
                 hasInvincibility = false;
                 break;
+            case PowerUpType.TimeSlow:
+                hasTimeSlow = false;
+                break;
         }
 
         SetGlowColor(entityColor);
@@ -346,7 +541,15 @@ public class Player : Entity
         return blockCooldownRemaining / blockCooldown;
     }
 
-    public bool HasInvincibility => hasInvincibility;
+    public float GetShieldCooldownPercent()
+    {
+        return shieldCooldownRemaining / shieldCooldown;
+    }
+
+    public bool HasInvincibility => hasInvincibility || isShielded;
+    public bool IsShielded => isShielded;
+    public bool HasTimeSlow => hasTimeSlow;
+    public int NearMissStreak => nearMissStreak;
 
     void OnDestroy()
     {
@@ -360,5 +563,7 @@ public enum PowerUpType
 {
     SpeedBoost,
     Invincibility,
-    AISlowdown
+    AISlowdown,
+    TimeSlow,
+    Teleport
 }

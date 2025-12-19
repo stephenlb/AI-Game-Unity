@@ -10,22 +10,34 @@ public class UIManager : MonoBehaviour
     Text statsText, gameOverText, levelText;
     Text comboText, controlsText;
     Image dashCooldownBar, comboProgressBar;
-    Image speedBoostIndicator, invincibilityIndicator, aiSlowIndicator;
+    Image speedBoostIndicator, invincibilityIndicator, aiSlowIndicator, timeSlowIndicator, teleportIndicator;
     RectTransform dashCooldownFill, comboProgressFill;
 
     // Mobile UI elements
     GameObject blockButton;
     Image blockButtonImage;
     Image blockButtonFill;
+    GameObject shieldButton;
+    Image shieldButtonImage;
+    Image shieldButtonFill;
     bool isMobile;
 
     // Game over UI elements
     Text gameOverSubtext;
     Text finalScoreText;
+    Text highScoreText;
+    Text newHighScoreText;
     Text aiVictoryText;
     Text restartHintText;
     CanvasGroup gameOverCanvasGroup;
     float lastGameOverPhase = -1;
+
+    // Notification UI
+    Text notificationText;
+    CanvasGroup notificationCanvasGroup;
+
+    // Near miss display
+    Text nearMissText;
 
     void Start()
     {
@@ -64,11 +76,11 @@ public class UIManager : MonoBehaviour
 
         // Controls text (bottom-left) - different text for mobile
         controlsText = CreateText(canvas.transform, "ControlsText", 11, new Color(0.5f, 0.5f, 0.5f), TextAnchor.LowerLeft);
-        SetRect(controlsText, new Vector2(0, 0), new Vector2(0, 0), new Vector2(0, 0), new Vector2(15, 15), new Vector2(300, 80));
+        SetRect(controlsText, new Vector2(0, 0), new Vector2(0, 0), new Vector2(0, 0), new Vector2(15, 15), new Vector2(300, 100));
         if (isMobile)
-            controlsText.text = "TOUCH: Move\nBLOCK BUTTON: Slow AI\nStay near AI for COMBO!";
+            controlsText.text = "TOUCH: Move\nBLOCK: Slow AI | SHIELD: Invincible\nStay near AI for COMBO & NEAR MISS!";
         else
-            controlsText.text = "MOUSE: Move\nSPACE/RIGHT-CLICK: Slow AI\nStay near AI for COMBO!";
+            controlsText.text = "MOUSE: Move | SHIFT: Shield\nSPACE/RIGHT-CLICK: Slow AI\nStay near AI for COMBO & NEAR MISS!";
 
         // Game over container with canvas group for fading
         var gameOverContainer = new GameObject("GameOverContainer");
@@ -96,15 +108,26 @@ public class UIManager : MonoBehaviour
         finalScoreText.text = "FINAL SCORE: 0";
         SetRect(finalScoreText, Vector2.one * 0.5f, Vector2.one * 0.5f, Vector2.one * 0.5f, new Vector2(0, -60), new Vector2(600, 80));
 
+        // High score
+        highScoreText = CreateText(gameOverContainer.transform, "HighScore", isMobile ? 18 : 22, new Color(0.8f, 0.8f, 0.2f), TextAnchor.MiddleCenter);
+        highScoreText.text = "HIGH SCORE: 0";
+        SetRect(highScoreText, Vector2.one * 0.5f, Vector2.one * 0.5f, Vector2.one * 0.5f, new Vector2(0, -100), new Vector2(400, 40));
+
+        // New high score banner
+        newHighScoreText = CreateText(gameOverContainer.transform, "NewHighScore", isMobile ? 24 : 32, new Color(1f, 0.8f, 0f), TextAnchor.MiddleCenter);
+        newHighScoreText.text = "★ NEW HIGH SCORE! ★";
+        SetRect(newHighScoreText, Vector2.one * 0.5f, Vector2.one * 0.5f, Vector2.one * 0.5f, new Vector2(0, -140), new Vector2(500, 50));
+        newHighScoreText.gameObject.SetActive(false);
+
         // AI victory text
         aiVictoryText = CreateText(gameOverContainer.transform, "AIVictory", isMobile ? 18 : 22, new Color(0.8f, 0.4f, 0.4f), TextAnchor.MiddleCenter);
         aiVictoryText.text = "The AI has grown stronger...";
-        SetRect(aiVictoryText, Vector2.one * 0.5f, Vector2.one * 0.5f, Vector2.one * 0.5f, new Vector2(0, -130), new Vector2(600, 50));
+        SetRect(aiVictoryText, Vector2.one * 0.5f, Vector2.one * 0.5f, Vector2.one * 0.5f, new Vector2(0, -180), new Vector2(600, 50));
 
         // Restart hint
         restartHintText = CreateText(gameOverContainer.transform, "RestartHint", isMobile ? 14 : 16, new Color(0.5f, 0.5f, 0.5f), TextAnchor.MiddleCenter);
         restartHintText.text = "Restarting...";
-        SetRect(restartHintText, Vector2.one * 0.5f, Vector2.one * 0.5f, Vector2.one * 0.5f, new Vector2(0, -200), new Vector2(400, 40));
+        SetRect(restartHintText, Vector2.one * 0.5f, Vector2.one * 0.5f, Vector2.one * 0.5f, new Vector2(0, -230), new Vector2(400, 40));
 
         // Level text (center)
         levelText = CreateText(canvas.transform, "LevelText", isMobile ? 150 : 200, Color.white, TextAnchor.MiddleCenter);
@@ -120,8 +143,113 @@ public class UIManager : MonoBehaviour
         // Create mobile block button (bottom-right, large and touch-friendly)
         CreateMobileBlockButton(canvas.transform);
 
+        // Create mobile shield button (left of block button)
+        CreateMobileShieldButton(canvas.transform);
+
         // Create small block cooldown indicator near the button
         CreateBlockCooldownBar(canvas.transform);
+
+        // Create notification text (center screen)
+        CreateNotificationUI(canvas.transform);
+
+        // Create near miss display
+        CreateNearMissDisplay(canvas.transform);
+    }
+
+    void CreateNotificationUI(Transform parent)
+    {
+        var container = new GameObject("NotificationContainer");
+        container.transform.SetParent(parent);
+        var rect = container.AddComponent<RectTransform>();
+        rect.anchorMin = new Vector2(0.5f, 0.6f);
+        rect.anchorMax = new Vector2(0.5f, 0.6f);
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.anchoredPosition = Vector2.zero;
+        rect.sizeDelta = new Vector2(500, 60);
+
+        notificationCanvasGroup = container.AddComponent<CanvasGroup>();
+        notificationCanvasGroup.alpha = 0;
+
+        // Background
+        var bgImage = container.AddComponent<Image>();
+        bgImage.color = new Color(0, 0, 0, 0.7f);
+
+        notificationText = CreateText(container.transform, "NotificationText", isMobile ? 20 : 24, Color.white, TextAnchor.MiddleCenter);
+        SetRect(notificationText, Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero);
+    }
+
+    void CreateNearMissDisplay(Transform parent)
+    {
+        nearMissText = CreateText(parent, "NearMissText", isMobile ? 18 : 22, new Color(1f, 0.8f, 0f), TextAnchor.MiddleCenter);
+        SetRect(nearMissText, new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), new Vector2(0, 50), new Vector2(300, 50));
+        nearMissText.gameObject.SetActive(false);
+    }
+
+    void CreateMobileShieldButton(Transform parent)
+    {
+        shieldButton = new GameObject("ShieldButton");
+        shieldButton.transform.SetParent(parent);
+
+        var rect = shieldButton.AddComponent<RectTransform>();
+        rect.anchorMin = new Vector2(1, 0);
+        rect.anchorMax = new Vector2(1, 0);
+        rect.pivot = new Vector2(1, 0);
+        rect.anchoredPosition = new Vector2(-180, 30); // Left of block button
+        rect.sizeDelta = new Vector2(120, 120);
+
+        // Background circle
+        var bgObj = new GameObject("ShieldBg");
+        bgObj.transform.SetParent(shieldButton.transform);
+        var bgRect = bgObj.AddComponent<RectTransform>();
+        bgRect.anchorMin = Vector2.zero;
+        bgRect.anchorMax = Vector2.one;
+        bgRect.offsetMin = Vector2.zero;
+        bgRect.offsetMax = Vector2.zero;
+
+        var bgImage = bgObj.AddComponent<Image>();
+        bgImage.color = new Color(0.1f, 0.3f, 0.2f, 0.8f);
+        bgImage.sprite = CreateCircleSprite(64);
+
+        // Cooldown fill
+        var fillObj = new GameObject("ShieldFill");
+        fillObj.transform.SetParent(shieldButton.transform);
+        var fillRect = fillObj.AddComponent<RectTransform>();
+        fillRect.anchorMin = Vector2.zero;
+        fillRect.anchorMax = Vector2.one;
+        fillRect.offsetMin = new Vector2(8, 8);
+        fillRect.offsetMax = new Vector2(-8, -8);
+
+        shieldButtonFill = fillObj.AddComponent<Image>();
+        shieldButtonFill.color = new Color(0f, 1f, 0.5f, 0.9f);
+        shieldButtonFill.sprite = CreateCircleSprite(64);
+        shieldButtonFill.type = Image.Type.Filled;
+        shieldButtonFill.fillMethod = Image.FillMethod.Radial360;
+        shieldButtonFill.fillOrigin = (int)Image.Origin360.Top;
+        shieldButtonFill.fillClockwise = true;
+
+        // Button image
+        shieldButtonImage = shieldButton.AddComponent<Image>();
+        shieldButtonImage.color = new Color(0, 0, 0, 0);
+        shieldButtonImage.sprite = CreateCircleSprite(64);
+
+        // Add button component
+        var button = shieldButton.AddComponent<Button>();
+        button.targetGraphic = shieldButtonImage;
+        button.transition = Selectable.Transition.None;
+        button.onClick.AddListener(OnShieldButtonPressed);
+
+        // Label
+        var labelText = CreateText(shieldButton.transform, "ShieldLabel", 12, Color.white, TextAnchor.MiddleCenter);
+        SetRect(labelText, Vector2.zero, Vector2.one, new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero);
+        labelText.text = "SHIELD";
+    }
+
+    void OnShieldButtonPressed()
+    {
+        if (gm?.Player != null)
+        {
+            gm.Player.RequestShield();
+        }
     }
 
     void CreateMobileBlockButton(Transform parent)
@@ -317,14 +445,15 @@ public class UIManager : MonoBehaviour
         containerRect.anchorMax = new Vector2(0, 1);
         containerRect.pivot = new Vector2(0, 1);
         containerRect.anchoredPosition = new Vector2(15, -15);
-        containerRect.sizeDelta = new Vector2(180, 45);
+        containerRect.sizeDelta = new Vector2(250, 45);
 
-        int iconSize = isMobile ? 35 : 40;
-        int spacing = isMobile ? 40 : 50;
+        int iconSize = isMobile ? 30 : 35;
+        int spacing = isMobile ? 35 : 45;
 
         speedBoostIndicator = CreatePowerUpIcon(container.transform, "SpeedBoost", Color.yellow, 0, iconSize);
         invincibilityIndicator = CreatePowerUpIcon(container.transform, "Invincibility", Color.cyan, spacing, iconSize);
         aiSlowIndicator = CreatePowerUpIcon(container.transform, "AISlowdown", Color.blue, spacing * 2, iconSize);
+        timeSlowIndicator = CreatePowerUpIcon(container.transform, "TimeSlow", new Color(0.5f, 0f, 1f), spacing * 3, iconSize);
     }
 
     Image CreatePowerUpIcon(Transform parent, string name, Color color, float xOffset, int size)
@@ -375,6 +504,8 @@ public class UIManager : MonoBehaviour
     {
         if (gm == null) return;
 
+        UpdateNotificationDisplay();
+
         switch (gm.CurrentScene)
         {
             case GameScene.Play:
@@ -383,10 +514,13 @@ public class UIManager : MonoBehaviour
                 UpdateBlockCooldown();
                 UpdatePowerUpIndicators();
                 UpdateBlockButton();
+                UpdateShieldButton();
+                UpdateNearMissDisplay();
                 gameOverText.transform.parent.gameObject.SetActive(false);
                 levelText.gameObject.SetActive(false);
                 controlsText.gameObject.SetActive(true);
                 blockButton.SetActive(true);
+                shieldButton.SetActive(true);
                 lastGameOverPhase = -1;
                 break;
             case GameScene.GameOver:
@@ -394,6 +528,8 @@ public class UIManager : MonoBehaviour
                 levelText.gameObject.SetActive(false);
                 controlsText.gameObject.SetActive(false);
                 blockButton.SetActive(false);
+                shieldButton.SetActive(false);
+                nearMissText.gameObject.SetActive(false);
                 break;
             case GameScene.Level:
                 statsText.gameObject.SetActive(false);
@@ -403,11 +539,93 @@ public class UIManager : MonoBehaviour
                 levelText.text = gm.AI.level.ToString();
                 controlsText.gameObject.SetActive(false);
                 blockButton.SetActive(false);
+                shieldButton.SetActive(false);
+                nearMissText.gameObject.SetActive(false);
 
                 // Animate level text
                 float scale = 1f + Mathf.Sin(Time.time * 10f) * 0.1f;
                 levelText.transform.localScale = Vector3.one * scale;
                 break;
+        }
+    }
+
+    void UpdateNotificationDisplay()
+    {
+        if (notificationCanvasGroup == null) return;
+
+        string notification = gm.CurrentNotification;
+        if (!string.IsNullOrEmpty(notification))
+        {
+            notificationText.text = notification;
+            float fadeT = gm.NotificationTime;
+            // Fade in quickly, fade out slowly
+            float alpha = fadeT > 1.5f ? Mathf.Lerp(0, 1, (2f - fadeT) * 2f) : Mathf.Lerp(0, 1, fadeT / 1.5f);
+            notificationCanvasGroup.alpha = alpha;
+
+            // Slight bounce effect
+            float bounce = 1f + Mathf.Sin(Time.time * 8f) * 0.03f;
+            notificationText.transform.localScale = Vector3.one * bounce;
+        }
+        else
+        {
+            notificationCanvasGroup.alpha = 0;
+        }
+    }
+
+    void UpdateNearMissDisplay()
+    {
+        if (gm.Player == null) return;
+
+        int streak = gm.Player.NearMissStreak;
+        if (streak > 0)
+        {
+            nearMissText.gameObject.SetActive(true);
+            nearMissText.text = $"NEAR MISS x{streak}!";
+
+            // Pulsing effect
+            float pulse = 1f + Mathf.Sin(Time.time * 10f) * 0.15f;
+            nearMissText.transform.localScale = Vector3.one * pulse;
+
+            // Color intensifies with streak
+            float intensity = Mathf.Min(1f, 0.5f + streak * 0.1f);
+            nearMissText.color = new Color(1f, intensity, 0f);
+        }
+        else
+        {
+            nearMissText.gameObject.SetActive(false);
+        }
+    }
+
+    void UpdateShieldButton()
+    {
+        if (gm.Player == null || shieldButtonFill == null) return;
+
+        float cooldownPercent = gm.Player.GetShieldCooldownPercent();
+        float fillAmount = 1f - cooldownPercent;
+
+        shieldButtonFill.fillAmount = fillAmount;
+
+        // Color and scale feedback
+        if (cooldownPercent <= 0)
+        {
+            shieldButtonFill.color = new Color(0f, 1f, 0.5f, 0.9f);
+
+            // Subtle pulse when ready
+            float pulse = 1f + Mathf.Sin(Time.time * 4f) * 0.05f;
+            shieldButton.transform.localScale = Vector3.one * pulse;
+        }
+        else
+        {
+            shieldButtonFill.color = new Color(0f, 0.5f, 0.25f, 0.5f);
+            shieldButton.transform.localScale = Vector3.one;
+        }
+
+        // Glow while shield is active
+        if (gm.Player.IsShielded)
+        {
+            float flash = Mathf.Sin(Time.time * 10f) * 0.3f + 0.7f;
+            shieldButtonFill.color = new Color(flash, 1f, flash, 0.95f);
+            shieldButton.transform.localScale = Vector3.one * (1f + Mathf.Sin(Time.time * 8f) * 0.1f);
         }
     }
 
@@ -418,6 +636,7 @@ public class UIManager : MonoBehaviour
         var ai = gm.AI;
 
         string multiplierText = gm.ComboMultiplier > 1f ? $" x{gm.ComboMultiplier:F1}" : "";
+        string highScoreStr = gm.HighScore > 0 ? $"Best: {gm.HighScore}" : "";
 
         if (isMobile)
         {
@@ -425,6 +644,7 @@ public class UIManager : MonoBehaviour
             statsText.text = $@"Level: {ai.level}
 Threat: {ai.ThreatLevel * 100:F0}%
 Score: {gm.Score / 6}{multiplierText}
+{highScoreStr}
 Online: {gm.Occupancy}";
         }
         else
@@ -434,6 +654,7 @@ Threat Level: {ai.ThreatLevel * 100:F0}%
 AI Level: {ai.level}
 
 Score: {gm.Score / 6}{multiplierText}
+{highScoreStr}
 Online: {gm.Occupancy}
 
 Features:  {ai.Features[0]:F2}, {ai.Features[1]:F2}
@@ -536,6 +757,7 @@ Output:    {ai.Output[0]:F2}, {ai.Output[1]:F2}";
         speedBoostIndicator.gameObject.SetActive(gm.Player.hasSpeedBoost);
         invincibilityIndicator.gameObject.SetActive(gm.Player.hasInvincibility);
         aiSlowIndicator.gameObject.SetActive(gm.AI != null && gm.AI.isSlowed);
+        timeSlowIndicator.gameObject.SetActive(gm.Player.HasTimeSlow);
 
         // Pulse active indicators
         float pulse = Mathf.Sin(Time.time * 5f) * 0.2f + 0.8f;
@@ -548,6 +770,9 @@ Output:    {ai.Output[0]:F2}, {ai.Output[1]:F2}";
 
         if (aiSlowIndicator.gameObject.activeSelf)
             aiSlowIndicator.transform.localScale = Vector3.one * pulse;
+
+        if (timeSlowIndicator.gameObject.activeSelf)
+            timeSlowIndicator.transform.localScale = Vector3.one * pulse;
     }
 
     void UpdateGameOverUI()
@@ -627,6 +852,8 @@ Output:    {ai.Output[0]:F2}, {ai.Output[1]:F2}";
             gameOverSubtext.gameObject.SetActive(true);
             gameOverText.gameObject.SetActive(true);
             finalScoreText.gameObject.SetActive(true);
+            highScoreText.gameObject.SetActive(true);
+            newHighScoreText.gameObject.SetActive(gm.IsNewHighScore && t > 0.3f);
             aiVictoryText.gameObject.SetActive(t > 0.5f);
             restartHintText.gameObject.SetActive(false);
 
@@ -641,6 +868,18 @@ Output:    {ai.Output[0]:F2}, {ai.Output[1]:F2}";
             finalScoreText.text = $"FINAL SCORE: {displayScore}";
             float scoreScale = Mathf.Lerp(1.5f, 1f, t);
             finalScoreText.transform.localScale = Vector3.one * scoreScale;
+
+            // High score
+            highScoreText.text = $"HIGH SCORE: {gm.HighScore}";
+
+            // New high score banner animation
+            if (gm.IsNewHighScore && t > 0.3f)
+            {
+                float hsT = (t - 0.3f) / 0.7f;
+                float hsPulse = 1f + Mathf.Sin(unscaledTime * 6f) * 0.1f;
+                newHighScoreText.transform.localScale = Vector3.one * hsPulse;
+                newHighScoreText.color = Color.Lerp(new Color(1f, 0.8f, 0f, 0f), new Color(1f, 0.8f, 0f, 1f), hsT);
+            }
 
             // AI victory message fades in
             if (t > 0.5f)
@@ -668,6 +907,8 @@ Output:    {ai.Output[0]:F2}, {ai.Output[1]:F2}";
             gameOverSubtext.gameObject.SetActive(true);
             gameOverText.gameObject.SetActive(true);
             finalScoreText.gameObject.SetActive(true);
+            highScoreText.gameObject.SetActive(true);
+            newHighScoreText.gameObject.SetActive(gm.IsNewHighScore);
             aiVictoryText.gameObject.SetActive(true);
             restartHintText.gameObject.SetActive(true);
 
@@ -679,6 +920,17 @@ Output:    {ai.Output[0]:F2}, {ai.Output[1]:F2}";
             // Score is final
             finalScoreText.text = $"FINAL SCORE: {gm.FinalScore}";
             finalScoreText.transform.localScale = Vector3.one;
+
+            // High score
+            highScoreText.text = $"HIGH SCORE: {gm.HighScore}";
+
+            // New high score continues to pulse
+            if (gm.IsNewHighScore)
+            {
+                float hsPulse = 1f + Mathf.Sin(unscaledTime * 4f) * 0.08f;
+                newHighScoreText.transform.localScale = Vector3.one * hsPulse;
+                newHighScoreText.color = new Color(1f, 0.8f, 0f, 1f);
+            }
 
             // AI text fully visible
             aiVictoryText.color = new Color(0.8f, 0.4f, 0.4f, 1f);

@@ -21,8 +21,14 @@ public class AudioManager : MonoBehaviour
     [Range(0f, 1f)] public float sfxVolume = 0.7f;
 
     AudioSource musicSource;
+    AudioSource musicSource2; // For crossfading
     List<AudioSource> sfxSources = new List<AudioSource>();
     Dictionary<SFXType, AudioClip> sfxClips = new Dictionary<SFXType, AudioClip>();
+
+    int currentMusicLevel = 1;
+    bool isCrossfading;
+    float crossfadeProgress;
+    float crossfadeDuration = 2f;
 
     void Awake()
     {
@@ -32,6 +38,10 @@ public class AudioManager : MonoBehaviour
         musicSource = gameObject.AddComponent<AudioSource>();
         musicSource.loop = true;
         musicSource.volume = musicVolume;
+
+        musicSource2 = gameObject.AddComponent<AudioSource>();
+        musicSource2.loop = true;
+        musicSource2.volume = 0;
 
         // Create pool of SFX sources
         for (int i = 0; i < 8; i++)
@@ -53,6 +63,90 @@ public class AudioManager : MonoBehaviour
         level3Music ??= Resources.Load<AudioClip>("Audio/level3");
 
         if (level1Music) PlayMusic(level1Music);
+    }
+
+    void Update()
+    {
+        // Handle crossfade
+        if (isCrossfading)
+        {
+            crossfadeProgress += Time.unscaledDeltaTime / crossfadeDuration;
+
+            if (crossfadeProgress >= 1f)
+            {
+                // Crossfade complete
+                crossfadeProgress = 1f;
+                isCrossfading = false;
+
+                musicSource.volume = 0;
+                musicSource.Stop();
+
+                // Swap sources
+                var temp = musicSource;
+                musicSource = musicSource2;
+                musicSource2 = temp;
+
+                musicSource.volume = musicVolume;
+            }
+            else
+            {
+                // Smooth crossfade using sine curve for natural feel
+                float t = Mathf.Sin(crossfadeProgress * Mathf.PI * 0.5f);
+                musicSource.volume = musicVolume * (1f - t);
+                musicSource2.volume = musicVolume * t;
+            }
+        }
+    }
+
+    public void PlayMusicForLevel(int level)
+    {
+        AudioClip targetClip = GetMusicForLevel(level);
+        if (targetClip == null) return;
+
+        // Don't change if already playing this level's music
+        if (currentMusicLevel == level && musicSource.isPlaying) return;
+
+        currentMusicLevel = level;
+
+        // If music is currently playing, crossfade
+        if (musicSource.isPlaying)
+        {
+            CrossfadeToClip(targetClip);
+        }
+        else
+        {
+            PlayMusic(targetClip);
+        }
+    }
+
+    AudioClip GetMusicForLevel(int level)
+    {
+        // Cycle through available music tracks
+        // Levels 1-2: level1Music
+        // Levels 3-4: level2Music
+        // Levels 5+: level3Music
+        if (level >= 5 && level3Music != null)
+            return level3Music;
+        else if (level >= 3 && level2Music != null)
+            return level2Music;
+        else if (level1Music != null)
+            return level1Music;
+
+        return null;
+    }
+
+    void CrossfadeToClip(AudioClip clip)
+    {
+        if (clip == null) return;
+
+        // Setup the second source with new clip
+        musicSource2.clip = clip;
+        musicSource2.volume = 0;
+        musicSource2.Play();
+
+        // Start crossfade
+        isCrossfading = true;
+        crossfadeProgress = 0f;
     }
 
     void GenerateSoundEffects()

@@ -49,7 +49,8 @@ public class Entity : MonoBehaviour
     {
         pulseTime += Time.deltaTime * pulseSpeed;
         float pulse = 1f + Mathf.Sin(pulseTime) * pulseAmount;
-        float scale = (baseSize > 0 ? baseSize : size) / 50f * pulse;
+        // Scale matches collision radius: size/100 divided by sprite radius (1.26 units)
+        float scale = (baseSize > 0 ? baseSize : size) / 126f * pulse;
         transform.localScale = new Vector3(scale, scale, 1);
 
         // Update glow pulse (inverse of main pulse for breathing effect)
@@ -72,23 +73,39 @@ public class Entity : MonoBehaviour
 
     void CreateCircleSprite()
     {
-        int res = 128;
+        int res = 256; // Higher resolution for smoother edges
         var tex = new Texture2D(res, res, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
         var colors = new Color[res * res];
-        float center = res / 2f, radius = center - 1;
+        float center = res / 2f;
+        float radius = center - 2f;
+        float edgeWidth = 2.5f; // Anti-aliasing edge width
 
         for (int y = 0; y < res; y++)
             for (int x = 0; x < res; x++)
             {
-                float dist = Vector2.Distance(new Vector2(x, y), new Vector2(center, center));
-                if (dist <= radius)
+                float dist = Vector2.Distance(new Vector2(x + 0.5f, y + 0.5f), new Vector2(center, center));
+
+                float alpha;
+                if (dist <= radius - edgeWidth)
                 {
-                    // Add subtle edge gradient for depth
-                    float edgeFade = 1f - Mathf.Pow(dist / radius, 3);
-                    colors[y * res + x] = new Color(1, 1, 1, edgeFade * 0.3f + 0.7f);
+                    // Inside the circle - full opacity with subtle depth gradient
+                    float edgeFade = 1f - Mathf.Pow(dist / radius, 4) * 0.2f;
+                    alpha = edgeFade * 0.3f + 0.7f;
+                }
+                else if (dist <= radius + edgeWidth)
+                {
+                    // Edge zone - smooth anti-aliased transition
+                    float edgeT = (dist - (radius - edgeWidth)) / (edgeWidth * 2f);
+                    float smoothEdge = 1f - Mathf.SmoothStep(0f, 1f, edgeT);
+                    alpha = smoothEdge;
                 }
                 else
-                    colors[y * res + x] = Color.clear;
+                {
+                    // Outside the circle
+                    alpha = 0f;
+                }
+
+                colors[y * res + x] = new Color(1, 1, 1, alpha);
             }
 
         tex.SetPixels(colors);
@@ -107,8 +124,8 @@ public class Entity : MonoBehaviour
         glowRenderer.material = new Material(Shader.Find("Sprites/Default"));
         glowRenderer.sortingOrder = 0;
 
-        // Create soft glow texture
-        int res = 128;
+        // Create soft glow texture with higher resolution
+        int res = 256;
         var tex = new Texture2D(res, res, TextureFormat.RGBA32, false) { filterMode = FilterMode.Bilinear };
         var colors = new Color[res * res];
         float center = res / 2f;
@@ -116,10 +133,19 @@ public class Entity : MonoBehaviour
         for (int y = 0; y < res; y++)
             for (int x = 0; x < res; x++)
             {
-                float dist = Vector2.Distance(new Vector2(x, y), new Vector2(center, center));
-                float alpha = Mathf.Clamp01(1f - dist / center);
-                alpha = alpha * alpha * alpha; // Cubic falloff for soft glow
-                colors[y * res + x] = new Color(1, 1, 1, alpha * 0.6f);
+                float dist = Vector2.Distance(new Vector2(x + 0.5f, y + 0.5f), new Vector2(center, center));
+                float normalizedDist = dist / center;
+
+                // Use a smoother falloff that reaches zero at the edge
+                // Steeper gaussian combined with edge fade to prevent abrupt cutoff
+                float gaussian = Mathf.Exp(-normalizedDist * normalizedDist * 4f);
+
+                // Smooth edge fade - starts fading at 70% and reaches zero at 100%
+                float edgeFade = normalizedDist < 0.7f ? 1f :
+                    Mathf.SmoothStep(1f, 0f, (normalizedDist - 0.7f) / 0.3f);
+
+                float alpha = gaussian * edgeFade * 0.6f;
+                colors[y * res + x] = new Color(1, 1, 1, alpha);
             }
 
         tex.SetPixels(colors);
@@ -151,7 +177,8 @@ public class Entity : MonoBehaviour
         {
             spriteRenderer.enabled = true;
             spriteRenderer.color = entityColor;
-            float scale = size / 50f;
+            // Scale matches collision radius: size/100 divided by sprite radius (1.26 units)
+            float scale = size / 126f;
             transform.localScale = new Vector3(scale, scale, 1);
             transform.position = new Vector3(transform.position.x, transform.position.y, 0);
         }

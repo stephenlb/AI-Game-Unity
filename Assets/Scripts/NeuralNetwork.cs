@@ -9,39 +9,60 @@ public class NeuralNetwork
     float[] b1, b2, b3;
     float[] l1Out, l1Act, l2Out, l2Act, outLayer;
     float lr = 0.0005f;
+    bool initialized = false;
+
+    // Use System.Random to avoid Unity serialization issues
+    static System.Random sysRandom = new System.Random();
 
     public float[] LastOutput { get; private set; }
     public float LastLoss { get; private set; }
 
     public NeuralNetwork()
     {
-        InitWeights();
+        InitArrays();
+    }
+
+    void InitArrays()
+    {
         l1Out = new float[16]; l1Act = new float[16];
         l2Out = new float[16]; l2Act = new float[16];
         outLayer = new float[2]; LastOutput = new float[2];
+        w1 = new float[4, 16]; b1 = new float[16];
+        w2 = new float[16, 16]; b2 = new float[16];
+        w3 = new float[16, 2]; b3 = new float[2];
+    }
+
+    public void Initialize()
+    {
+        if (initialized) return;
+        InitWeights();
+        initialized = true;
     }
 
     void InitWeights()
     {
-        w1 = new float[4, 16]; b1 = new float[16];
-        w2 = new float[16, 16]; b2 = new float[16];
-        w3 = new float[16, 2]; b3 = new float[2];
+        if (w1 == null) InitArrays();
 
         float s1 = Mathf.Sqrt(2f / 4f), s2 = Mathf.Sqrt(2f / 16f);
 
         for (int i = 0; i < 4; i++)
             for (int j = 0; j < 16; j++)
-                w1[i, j] = UnityEngine.Random.Range(-1f, 1f) * s1;
+                w1[i, j] = ((float)sysRandom.NextDouble() * 2f - 1f) * s1;
 
         for (int i = 0; i < 16; i++)
         {
-            for (int j = 0; j < 16; j++) w2[i, j] = UnityEngine.Random.Range(-1f, 1f) * s2;
-            for (int j = 0; j < 2; j++) w3[i, j] = UnityEngine.Random.Range(-1f, 1f) * s2;
+            for (int j = 0; j < 16; j++) w2[i, j] = ((float)sysRandom.NextDouble() * 2f - 1f) * s2;
+            for (int j = 0; j < 2; j++) w3[i, j] = ((float)sysRandom.NextDouble() * 2f - 1f) * s2;
         }
+
+        initialized = true;
     }
 
     public float[] Forward(float[] input)
     {
+        // Auto-initialize if needed
+        if (!initialized) Initialize();
+
         // Layer 1
         for (int j = 0; j < 16; j++)
         {
@@ -123,5 +144,9 @@ public class NeuralNetwork
     float Tanh(float x) => (float)Math.Tanh(x);
     float TanhDeriv(float x) => 1 - x * x;
 
-    public void Reset() => InitWeights();
+    public void Reset()
+    {
+        initialized = false;
+        InitWeights();
+    }
 }
